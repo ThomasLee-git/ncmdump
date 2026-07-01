@@ -1,0 +1,55 @@
+name: macOS arm64
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build macOS arm64
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Fetch bundled TagLib source
+        run: |
+          mkdir -p "${{ github.workspace }}/deps"
+          curl -L \
+            -o "${{ github.workspace }}/deps/taglib-2.3.tar.gz" \
+            "https://github.com/taglib/taglib/releases/download/v2.3/taglib-2.3.tar.gz"
+          echo "7349f6fd942418bc7009ebe743eb7c9d055f02921ec56fa436ec25007c47fd38  ${{ github.workspace }}/deps/taglib-2.3.tar.gz" | shasum -a 256 -c -
+          tar -xzf "${{ github.workspace }}/deps/taglib-2.3.tar.gz" -C "${{ github.workspace }}/deps"
+
+      - name: Configure
+        run: |
+          cmake -S "${{ github.workspace }}/ports/macos-arm64" \
+                -B "${{ github.workspace }}/build-macos-arm64" \
+                -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build "${{ github.workspace }}/build-macos-arm64" --config Release --parallel
+
+      - name: Verify architecture
+        run: |
+          file "${{ github.workspace }}/build-macos-arm64/ncmdump"
+          lipo -archs "${{ github.workspace }}/build-macos-arm64/ncmdump"
+          test "$(lipo -archs "${{ github.workspace }}/build-macos-arm64/ncmdump")" = "arm64"
+
+      - name: Package
+        run: |
+          mkdir -p "${{ github.workspace }}/artifacts"
+          cp "${{ github.workspace }}/build-macos-arm64/ncmdump" "${{ github.workspace }}/artifacts/ncmdump-macos-arm64"
+          chmod +x "${{ github.workspace }}/artifacts/ncmdump-macos-arm64"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncmdump-macos-arm64
+          path: ${{ github.workspace }}/artifacts/ncmdump-macos-arm64

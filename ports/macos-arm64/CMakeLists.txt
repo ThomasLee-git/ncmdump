@@ -1,0 +1,84 @@
+cmake_minimum_required(VERSION 3.14)
+
+set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "" FORCE)
+
+project(ncmdump_macos_arm64 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+get_filename_component(NCMDUMP_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_BINDINGS OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WITH_ZLIB OFF CACHE BOOL "" FORCE)
+
+set(WITH_APE OFF CACHE BOOL "" FORCE)
+set(WITH_ASF OFF CACHE BOOL "" FORCE)
+set(WITH_DSF OFF CACHE BOOL "" FORCE)
+set(WITH_MATROSKA OFF CACHE BOOL "" FORCE)
+set(WITH_MOD OFF CACHE BOOL "" FORCE)
+set(WITH_MP4 OFF CACHE BOOL "" FORCE)
+set(WITH_RIFF OFF CACHE BOOL "" FORCE)
+set(WITH_SHORTEN OFF CACHE BOOL "" FORCE)
+set(WITH_TRUEAUDIO OFF CACHE BOOL "" FORCE)
+set(WITH_VORBIS ON CACHE BOOL "" FORCE)
+
+add_subdirectory("${NCMDUMP_ROOT}/deps/taglib-2.3" "${CMAKE_BINARY_DIR}/taglib")
+
+set(TAGLIB_FLAT_INCLUDE_DIR "${CMAKE_BINARY_DIR}/taglib-flat-include/taglib")
+file(MAKE_DIRECTORY "${TAGLIB_FLAT_INCLUDE_DIR}")
+
+file(GLOB_RECURSE TAGLIB_PUBLIC_HEADERS
+  "${NCMDUMP_ROOT}/deps/taglib-2.3/taglib/*.h"
+  "${NCMDUMP_ROOT}/deps/taglib-2.3/taglib/*.tcc"
+)
+
+foreach(TAGLIB_PUBLIC_HEADER IN LISTS TAGLIB_PUBLIC_HEADERS)
+  get_filename_component(TAGLIB_PUBLIC_HEADER_NAME "${TAGLIB_PUBLIC_HEADER}" NAME)
+  configure_file(
+    "${TAGLIB_PUBLIC_HEADER}"
+    "${TAGLIB_FLAT_INCLUDE_DIR}/${TAGLIB_PUBLIC_HEADER_NAME}"
+    COPYONLY
+  )
+endforeach()
+
+configure_file(
+  "${CMAKE_BINARY_DIR}/taglib/taglib_config.h"
+  "${TAGLIB_FLAT_INCLUDE_DIR}/taglib_config.h"
+  COPYONLY
+)
+configure_file(
+  "${CMAKE_BINARY_DIR}/taglib/config.h"
+  "${TAGLIB_FLAT_INCLUDE_DIR}/config.h"
+  COPYONLY
+)
+
+file(GLOB NCMDUMP_COMMON_HEADERS "${NCMDUMP_ROOT}/src/include/*.h")
+file(GLOB NCMDUMP_COMMON_SOURCES
+  "${NCMDUMP_ROOT}/src/ncmcrypt.cpp"
+  "${NCMDUMP_ROOT}/src/utils/*.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/cli_features.cpp"
+)
+
+add_executable(ncmdump
+  ${NCMDUMP_COMMON_HEADERS}
+  ${NCMDUMP_COMMON_SOURCES}
+  "${CMAKE_CURRENT_LIST_DIR}/main.cpp"
+)
+
+target_include_directories(ncmdump PRIVATE
+  "${NCMDUMP_ROOT}/src/include"
+  "${CMAKE_CURRENT_LIST_DIR}"
+  "${CMAKE_BINARY_DIR}/taglib-flat-include"
+)
+
+string(TIMESTAMP NCMDUMP_MACOS_PORT_VERSION "%Y-%m-%d-%H-%M")
+target_compile_definitions(ncmdump PRIVATE
+  NCMDUMP_MACOS_PORT_VERSION="${NCMDUMP_MACOS_PORT_VERSION}"
+)
+
+target_link_libraries(ncmdump PRIVATE tag)
