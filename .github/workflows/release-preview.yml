@@ -1,0 +1,182 @@
+name: Preview release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag. Leave blank to generate preview-YYYY-MM-DD-HH-MM-RUN."
+        required: false
+        type: string
+      title:
+        description: "Release title. Leave blank to use the tag."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos-arm64:
+    name: Build macOS arm64
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Fetch bundled TagLib source
+        run: |
+          mkdir -p "${{ github.workspace }}/deps"
+          curl -L \
+            -o "${{ github.workspace }}/deps/taglib-2.3.tar.gz" \
+            "https://github.com/taglib/taglib/releases/download/v2.3/taglib-2.3.tar.gz"
+          echo "7349f6fd942418bc7009ebe743eb7c9d055f02921ec56fa436ec25007c47fd38  ${{ github.workspace }}/deps/taglib-2.3.tar.gz" | shasum -a 256 -c -
+          tar -xzf "${{ github.workspace }}/deps/taglib-2.3.tar.gz" -C "${{ github.workspace }}/deps"
+
+      - name: Configure
+        run: |
+          cmake -S "${{ github.workspace }}/ports/macos-arm64" \
+                -B "${{ github.workspace }}/build-macos-arm64" \
+                -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build "${{ github.workspace }}/build-macos-arm64" --config Release --parallel
+
+      - name: Verify architecture
+        run: |
+          file "${{ github.workspace }}/build-macos-arm64/ncmdump"
+          test "$(lipo -archs "${{ github.workspace }}/build-macos-arm64/ncmdump")" = "arm64"
+
+      - name: Package
+        run: |
+          mkdir -p "${{ github.workspace }}/artifacts"
+          cp "${{ github.workspace }}/build-macos-arm64/ncmdump" "${{ github.workspace }}/artifacts/ncmdump-macos-arm64"
+          chmod +x "${{ github.workspace }}/artifacts/ncmdump-macos-arm64"
+          cd "${{ github.workspace }}/artifacts"
+          shasum -a 256 ncmdump-macos-arm64 > ncmdump-macos-arm64.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncmdump-macos-arm64
+          path: |
+            ${{ github.workspace }}/artifacts/ncmdump-macos-arm64
+            ${{ github.workspace }}/artifacts/ncmdump-macos-arm64.sha256
+
+  build-android-arm64:
+    name: Build Android arm64
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Fetch bundled TagLib source
+        run: |
+          mkdir -p "${{ github.workspace }}/deps"
+          curl -L \
+            -o "${{ github.workspace }}/deps/taglib-2.3.tar.gz" \
+            "https://github.com/taglib/taglib/releases/download/v2.3/taglib-2.3.tar.gz"
+          echo "7349f6fd942418bc7009ebe743eb7c9d055f02921ec56fa436ec25007c47fd38  ${{ github.workspace }}/deps/taglib-2.3.tar.gz" | sha256sum -c -
+          tar -xzf "${{ github.workspace }}/deps/taglib-2.3.tar.gz" -C "${{ github.workspace }}/deps"
+
+      - name: Fetch Android NDK r27d
+        run: |
+          mkdir -p "${{ github.workspace }}/.ndk"
+          curl -L \
+            -o "${{ github.workspace }}/.ndk/android-ndk-r27d-linux.zip" \
+            "https://dl.google.com/android/repository/android-ndk-r27d-linux.zip"
+          echo "22105e410cf29afcf163760cc95522b9fb981121  ${{ github.workspace }}/.ndk/android-ndk-r27d-linux.zip" | sha1sum -c -
+          unzip -q "${{ github.workspace }}/.ndk/android-ndk-r27d-linux.zip" -d "${{ github.workspace }}/.ndk"
+
+      - name: Configure
+        env:
+          ANDROID_NDK_HOME: ${{ github.workspace }}/.ndk/android-ndk-r27d
+        run: |
+          cmake -S "${{ github.workspace }}/ports/android-cli" \
+                -B "${{ github.workspace }}/build-android-arm64" \
+                -G Ninja \
+                -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
+                -DANDROID_ABI=arm64-v8a \
+                -DANDROID_PLATFORM=android-23 \
+                -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build "${{ github.workspace }}/build-android-arm64" --parallel
+
+      - name: Verify architecture
+        run: |
+          file "${{ github.workspace }}/build-android-arm64/ncmdump"
+          "${{ github.workspace }}/.ndk/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "${{ github.workspace }}/build-android-arm64/ncmdump" | grep "Machine:.*AArch64"
+
+      - name: Package
+        run: |
+          mkdir -p "${{ github.workspace }}/artifacts"
+          cp "${{ github.workspace }}/build-android-arm64/ncmdump" "${{ github.workspace }}/artifacts/ncmdump-android-arm64"
+          chmod +x "${{ github.workspace }}/artifacts/ncmdump-android-arm64"
+          cd "${{ github.workspace }}/artifacts"
+          sha256sum ncmdump-android-arm64 > ncmdump-android-arm64.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncmdump-android-arm64
+          path: |
+            ${{ github.workspace }}/artifacts/ncmdump-android-arm64
+            ${{ github.workspace }}/artifacts/ncmdump-android-arm64.sha256
+
+  draft-release:
+    name: Create draft preview release
+    runs-on: ubuntu-latest
+    needs:
+      - build-macos-arm64
+      - build-android-arm64
+
+    steps:
+      - name: Resolve release metadata
+        id: release
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_TITLE: ${{ inputs.title }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="preview-$(date -u +%Y-%m-%d-%H-%M)-${GITHUB_RUN_NUMBER}"
+          fi
+
+          if [ -n "$INPUT_TITLE" ]; then
+            title="$INPUT_TITLE"
+          else
+            title="$tag"
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "title=$title"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create draft prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.release.outputs.title }}
+        run: |
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TITLE" \
+            --notes "Draft preview release for testing cross-compiled ncmdump CLI artifacts. Includes Android arm64 and macOS arm64 binaries built from ${GITHUB_SHA}." \
+            --draft \
+            --prerelease \
+            --latest=false
